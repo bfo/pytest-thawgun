@@ -23,6 +23,12 @@ setup(
     setup_requires=[
         'pytest-runner',
     ],
+    tests_require=[
+        'flask',
+        'flask-restful',
+        'aiohttp<3',
+        'requests',
+    ],
     install_requires=[
         'async-generator',
         'freezegun',
