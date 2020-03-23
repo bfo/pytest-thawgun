@@ -153,7 +153,10 @@ class ThawGun:
         try:
             await self._drain(self.loop.time())
 
-            while self.loop._scheduled and self.loop._scheduled[0]._when <= loop_target_time:
+            while (
+                self.loop._scheduled
+                and self.loop._scheduled[0]._when <= loop_target_time
+            ):
                 handle = self.loop._scheduled[0]
                 prev_drain_time = self.loop.time()
                 this_drain_time = handle._when
