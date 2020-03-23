@@ -89,6 +89,14 @@ async def call_endpoint_in_one_minute(session, url):
         return await rsp.text()
 
 
+async def test_get_in_task_timeout(session: aiohttp.ClientSession, server_url: str, thawgun: ThawGun):
+    task = thawgun.loop.create_task(call_endpoint_in_one_minute(session, server_url))
+    with thawgun as t:
+        await t.advance(59)
+        with pytest.raises(TimeoutError):
+            assert "abcd" in await wait_for(task, 1.0, loop=thawgun.loop)
+
+
 async def test_get_in_task(session: aiohttp.ClientSession, server_url: str, thawgun: ThawGun):
     task = thawgun.loop.create_task(call_endpoint_in_one_minute(session, server_url))
     with thawgun as t:
