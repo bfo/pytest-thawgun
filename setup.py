@@ -26,7 +26,7 @@ setup(
     tests_require=[
         'flask',
         'flask-restful',
-        'aiohttp<3',
+        'aiohttp',
         'requests',
     ],
     install_requires=[

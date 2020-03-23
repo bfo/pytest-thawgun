@@ -79,7 +79,7 @@ def server_url() -> str:
 @pytest.fixture
 @async_generator
 async def session(event_loop: AbstractEventLoop) -> aiohttp.ClientSession:
-    async with aiohttp.ClientSession(loop=event_loop) as session:
+    async with aiohttp.ClientSession() as session:
         return await yield_(session)
 
 
