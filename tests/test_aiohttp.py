@@ -1,6 +1,6 @@
 import contextlib
 import time
-from asyncio import AbstractEventLoop, wait_for
+from asyncio import AbstractEventLoop
 from multiprocessing import Process
 
 import aiohttp
@@ -12,7 +12,7 @@ from flask import Flask, request
 from flask_restful import Api, Resource
 from werkzeug import run_simple
 
-from pytest_thawgun.plugin import ThawGun
+from pytest_thawgun.plugin import ThawGun, wait_for
 
 pytestmark = pytest.mark.asyncio
 
@@ -93,4 +93,4 @@ async def test_get_in_task(session: aiohttp.ClientSession, server_url: str, thaw
     task = thawgun.loop.create_task(call_endpoint_in_one_minute(session, server_url))
     with thawgun as t:
         await t.advance(60)
-        assert "abcd" in await wait_for(task, 0.1, loop=thawgun.loop)
+        assert "abcd" in await wait_for(task, 1.0, loop=thawgun.loop)

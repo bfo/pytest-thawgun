@@ -1,13 +1,70 @@
 import asyncio
 import logging
-from asyncio import AbstractEventLoop
+from asyncio import (
+    AbstractEventLoop,
+    Event,
+    Future,
+    get_event_loop,
+    ensure_future,
+    CancelledError,
+)
 from datetime import datetime
 
 import pytest
+import threading
 from freezegun import freeze_time
-from typing import Tuple
+from typing import Tuple, TypeVar, Optional, Union, Awaitable
 
-__all__ = ['thawgun']
+__all__ = ["thawgun"]
+
+
+class ThreadsafeEvent(Event):
+    _loop = None  # type: Optional[AbstractEventLoop]
+
+    def set(self) -> None:
+        self._loop.call_soon_threadsafe(super(ThreadsafeEvent, self).set)
+
+
+T = TypeVar("T")
+
+
+def timeout_in_thread(
+    coro_timeout_event: ThreadsafeEvent, coro_ready_event: threading.Event, delay: float
+) -> None:
+    if not coro_ready_event.wait(timeout=delay):
+        coro_timeout_event.set()
+
+
+async def wait_for(
+    fut: Union[Future, Awaitable[T]],
+    timeout: float,
+    *,
+    loop: Optional[AbstractEventLoop] = None
+):
+    loop = loop or get_event_loop()
+
+    waiter = ThreadsafeEvent(loop=loop)
+    ready = threading.Event()
+    fut = ensure_future(fut, loop=loop)
+    fut.add_done_callback(lambda _: waiter.set)
+    fut.add_done_callback(lambda _: ready.set)
+    handle = loop.run_in_executor(None, timeout_in_thread, waiter, ready, timeout)
+
+    try:
+        await waiter.wait()
+    except CancelledError:
+        fut.remove_done_callback(waiter.set)
+        fut.cancel()
+        raise
+    finally:
+        await handle
+
+    if fut.done():
+        return fut.result()
+    else:
+        fut.remove_done_callback(waiter.set)
+        fut.cancel()
+        raise TimeoutError()
 
 
 class ThawGun:
