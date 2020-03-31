@@ -45,6 +45,7 @@ def server_url() -> str:
 
     class HelloWorld(Resource):
         def get(self):
+            print("Inside GET")
             return "abcd"
 
     class Shutdown(Resource):
@@ -83,10 +84,20 @@ async def session(event_loop: AbstractEventLoop) -> aiohttp.ClientSession:
         return await yield_(session)
 
 
-async def call_endpoint_in_one_minute(session, url):
-    await asyncio.sleep(60)
-    async with session.get(url) as rsp:
-        return await rsp.text()
+async def call_endpoint_in_one_minute(session, url, iter_count=2):
+    result = ""
+    total_time = 60
+    single_sleep_time = int(total_time / iter_count)
+    print("Single sleep time", single_sleep_time, "s")
+    for i in range(iter_count):
+        print("Iteration", i)
+        await asyncio.sleep(single_sleep_time)
+        print("Send GET", i)
+        result = "abcd"
+        async with session.get(url) as rsp:
+            print("Receive GET", i)
+            result = await rsp.text()
+    return result
 
 
 async def test_get_in_task_timeout(session: aiohttp.ClientSession, server_url: str, thawgun: ThawGun):
@@ -100,5 +111,15 @@ async def test_get_in_task_timeout(session: aiohttp.ClientSession, server_url: s
 async def test_get_in_task(session: aiohttp.ClientSession, server_url: str, thawgun: ThawGun):
     task = thawgun.loop.create_task(call_endpoint_in_one_minute(session, server_url))
     with thawgun as t:
-        await t.advance(60)
+        await t.advance(240)
         assert "abcd" in await wait_for(task, 1.0, loop=thawgun.loop)
+
+
+async def test_get_in_task2(session: aiohttp.ClientSession, server_url: str, event_loop):
+    thawgun = ThawGun(loop=event_loop)
+    task = thawgun.loop.create_task(call_endpoint_in_one_minute(session, server_url))
+
+    await thawgun.advance(240)
+    assert "abcd" in await wait_for(task, 1.0, loop=thawgun.loop)
+
+    thawgun.test_teardown()
