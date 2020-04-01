@@ -157,6 +157,10 @@ class ThawGun:
                 self.loop._scheduled
                 and self.loop._scheduled[0]._when <= loop_target_time
             ):
+                # print("thawgun tick", len(self.loop._scheduled))
+                # if len(self.loop._scheduled) > 0:
+                #     print("\t", self.loop._scheduled[0]._when, loop_target_time, self.loop._scheduled[0]._when <= loop_target_time)
+
                 handle = self.loop._scheduled[0]
                 prev_drain_time = self.loop.time()
                 this_drain_time = handle._when
@@ -171,6 +175,9 @@ class ThawGun:
                     handle._callback, handle._args = lambda: None, ()
 
                 await self._drain(self.loop.time())
+                # print("thawgun tack", len(self.loop._scheduled))
+                # if len(self.loop._scheduled) > 0:
+                #     print("\t", self.loop._scheduled[0]._when, loop_target_time, self.loop._scheduled[0]._when <= loop_target_time)
 
             self._frozen_wall_clock_control.tick(loop_target_time - self.loop.time())
 
@@ -180,6 +187,7 @@ class ThawGun:
             advance_end_dt = datetime.now()
 
         finally:
+            print("thawgun out")
             self._do_tick = prev_ticking_state
             self._adjust_loop_clock(loop_target_time)
             self.set_wall_clock(advance_end_dt)

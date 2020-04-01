@@ -1,86 +1,119 @@
-import contextlib
-import time
 from asyncio import AbstractEventLoop
-from multiprocessing import Process
 
 import aiohttp
+from aiohttp.client_exceptions import ClientConnectionError
 import asyncio
 import pytest
 import requests
 from async_generator import async_generator, yield_
-from flask import Flask, request
-from flask_restful import Api, Resource
-from werkzeug import run_simple
 
 from pytest_thawgun.plugin import ThawGun, wait_for
 
 pytestmark = pytest.mark.asyncio
 
+import json
+import time
+from contextlib import contextmanager, suppress, asynccontextmanager
+from multiprocessing import Process
+from typing import Dict
 
-def wait_for_api_to_be_accessible(url: str, timeout: int = 10, poll_interval: int = 1):
-    """
-    Waits for mock REST API to be accessible to requests.
+import requests
+import uvicorn
+from fastapi import FastAPI
 
-    :param url: url of the service
-    :param timeout: how many seconds the script will wait for REST API to be accessible
-    :param poll_interval: how often REST API will be polled
+
+def simple_app() -> FastAPI:
+    app = FastAPI()
+
+    @app.on_event("startup")
+    async def setup_edge_direct_client() -> None:
+        print("START APP")
+
+    @app.get("/")
+    async def delete_storage() -> str:
+        print("Inside GET")
+        return "abcd"
+
+    return app
+
+
+async def run_fun_async(fun, *args, **kwargs):
+    return fun(*args, **kwargs)
+
+
+async def run_uvicorn(app, **kwargs):
+    print("START")
+    uvicorn.run(app, **kwargs)
+    print("STOP")
+
+
+@asynccontextmanager
+async def setup_and_teardown_fastapi_app(app: FastAPI, host: str, port: int, event_loop: AbstractEventLoop, session: aiohttp.ClientSession):
     """
-    response = requests.Response()
-    response.status_code = 404
-    start_time = time.time()
-    while response.status_code != 200 and time.time() - start_time <= timeout:
-        with contextlib.suppress(requests.exceptions.ConnectionError):
-            response = requests.request("GET", url)
-        time.sleep(poll_interval)
-    assert response.status_code == 200, "Timeout expired: failed to start mock REST API in {} seconds".format(timeout)
+    Manages setup of the provided app on a given `host` and `port` and its teardown.
+
+    As for the setup process, the following things are done:
+        * `/health` endpoint is added to the provided app,
+        * The app is launched in a separate process,
+        * function waits for the app to fully launch - to do this it repetitively checks `the /health`
+         endpoint until it returns HTTP 200.
+
+    Example use of this function in a fixture:
+
+    >>> with setup_and_teardown_fastapi_app(FastAPI(), "localhost", 10000):
+    >>>     yield
+
+    :param app: app to launch
+    :param host: host on which to launch app
+    :param port: port on which to launch app
+    """
+
+    async def wait_until_app_healthy():
+        timeout = 10
+        start_time = time.time()
+        healthy = False
+
+        while not healthy and time.time() - start_time <= timeout:
+            print(time.time() - start_time <= timeout)
+            with suppress(ClientConnectionError):
+                async with session.post(f"http://{host}:{port}/health") as rsp:
+                    healthy = rsp.status == 200
+            await asyncio.sleep(0.1)
+
+        fail_message = f"Timeout expired: failed to start mock REST API in {timeout} seconds"
+        assert healthy, fail_message
+
+    app.post("/health")(lambda: "OK")
+
+    # process = Process(target=uvicorn.run, args=(app,), kwargs={"host": host, "port": port, "loop": "asyncio"})
+    # process.start()
+
+    # task = event_loop.create_task(run_fun_async(print, "haha", "buu"))
+    task = event_loop.create_task(run_uvicorn(app, host=host, port=port, loop="asyncio"))
+
+    await wait_until_app_healthy()
+    yield
+
+    task.cancel()
+    # await task
+
+    # process.terminate()
+    # process.join()
 
 
 @pytest.fixture
-def server_url() -> str:
-    app = Flask(__name__)
-    api = Api(app)
+async def server_url(event_loop, session) -> str:
     api_host = "localhost"
     api_port = 8080
     api_url = "http://localhost:8080"
-
-    class HelloWorld(Resource):
-        def get(self):
-            print("Inside GET")
-            return "abcd"
-
-    class Shutdown(Resource):
-        @staticmethod
-        def post():
-            shutdown_function = request.environ.get("werkzeug.server.shutdown")
-
-            if shutdown_function is None:
-                raise RuntimeError("Not running with the Werkzeug Server")
-
-            shutdown_function()
-            return "Server shutting down...", 200
-
-    api.add_resource(HelloWorld, '/')
-    api.add_resource(Shutdown, '/down')
-
-    flask_app_process = Process(name="PlatformAPIMock", target=run_simple,
-                                kwargs=dict(hostname=api_host,
-                                            port=api_port,
-                                            application=app,
-                                            use_debugger=True, use_reloader=False))
-    flask_app_process.start()
-    wait_for_api_to_be_accessible(api_url)
-    yield api_url
-
-    requests.request("POST", api_url + "/down")
-
-    if flask_app_process.is_alive():
-        flask_app_process.join()
+    async with setup_and_teardown_fastapi_app(simple_app(), api_host, api_port, event_loop, session):
+        yield api_url
 
 
 @pytest.fixture
 @async_generator
 async def session(event_loop: AbstractEventLoop) -> aiohttp.ClientSession:
-    async with aiohttp.ClientSession() as session:
+    async with aiohttp.ClientSession(loop=event_loop) as session:
         return await yield_(session)
 
 
@@ -93,33 +126,27 @@ async def call_endpoint_in_one_minute(session, url, iter_count=2):
         print("Iteration", i)
         await asyncio.sleep(single_sleep_time)
         print("Send GET", i)
-        result = "abcd"
+        # result = "abcd"
         async with session.get(url) as rsp:
             print("Receive GET", i)
             result = await rsp.text()
     return result
 
 
-async def test_get_in_task_timeout(session: aiohttp.ClientSession, server_url: str, thawgun: ThawGun):
-    task = thawgun.loop.create_task(call_endpoint_in_one_minute(session, server_url))
-    with thawgun as t:
-        await t.advance(59)
-        with pytest.raises(TimeoutError):
-            assert "abcd" in await wait_for(task, 1.0, loop=thawgun.loop)
+# async def test_get_in_task_timeout(session: aiohttp.ClientSession, server_url: str, thawgun: ThawGun):
+#     task = thawgun.loop.create_task(call_endpoint_in_one_minute(session, server_url))
+#     with thawgun as t:
+#         await t.advance(59)
+#         with pytest.raises(TimeoutError):
+#             assert "abcd" in await wait_for(task, 1.0, loop=thawgun.loop)
 
 
 async def test_get_in_task(session: aiohttp.ClientSession, server_url: str, thawgun: ThawGun):
     task = thawgun.loop.create_task(call_endpoint_in_one_minute(session, server_url))
     with thawgun as t:
-        await t.advance(240)
+        await t.advance(61)
         assert "abcd" in await wait_for(task, 1.0, loop=thawgun.loop)
 
 
-async def test_get_in_task2(session: aiohttp.ClientSession, server_url: str, event_loop):
-    thawgun = ThawGun(loop=event_loop)
-    task = thawgun.loop.create_task(call_endpoint_in_one_minute(session, server_url))
-
-    await thawgun.advance(240)
-    assert "abcd" in await wait_for(task, 1.0, loop=thawgun.loop)
-
-    thawgun.test_teardown()
+if __name__ == "__main__":
+    pass
